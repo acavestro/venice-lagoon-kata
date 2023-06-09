@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod test {
-    use mockall::predicate::*;
+    use mockall::{automock, predicate::*};
     struct Measurement {
         date: String,
         time: String,
@@ -17,6 +17,7 @@ mod test {
         }
     }
 
+    #[derive(Clone)]
     struct Subscriber {
         name: String,
         email: String,
@@ -66,12 +67,13 @@ mod test {
 
         assert!(notification.is_some());
         let notifier = Notifier::new();
-        let subscribers = [subscriber];
+        let subscribers = [subscriber.clone()];
         let result = notifier.notify(&subscribers);
         assert!(result.is_ok());
-        let sender = MockSender::new();
+        let mut sender = MockSender::new();
 
-        sender.expect_send().times(1).returning(|_| Ok(()));
+        sender.expect_send().times(1).returning(|_, _| Ok(()));
+        sender.send(subscriber, notification.unwrap());
     }
 
     //#[test]
