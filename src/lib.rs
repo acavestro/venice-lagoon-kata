@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod test {
     use mockall::{automock, predicate::*};
+    #[derive(Clone)]
     struct Measurement {
         date: String,
         time: String,
@@ -44,25 +45,30 @@ mod test {
 
     struct Notifier {
         sender: Box<dyn Sender>,
-        subscriber: Box<dyn Subscribers>,
+        subscribers: Box<dyn Subscribers>,
         measurements: Box<dyn Measurements>,
     }
 
     impl Notifier {
         fn new(
             sender: Box<dyn Sender>,
-            subscriber: Box<dyn Subscribers>,
+            subscribers: Box<dyn Subscribers>,
             measurements: Box<dyn Measurements>,
         ) -> Self {
             Self {
                 sender,
-                subscriber,
+                subscribers,
                 measurements,
             }
         }
 
         fn notify(&self) -> Result<(), String> {
-            Ok(())
+            let measurements = self.measurements.get()?;
+            let subscribers = self.subscribers.get()?;
+            self.sender.send(
+                subscribers.first().unwrap().clone(),
+                Notification::from_measurement(measurements.first().unwrap().clone()).unwrap(),
+            )
         }
     }
 
