@@ -42,14 +42,26 @@ mod test {
         }
     }
 
-    struct Notifier;
+    struct Notifier {
+        sender: Box<dyn Sender>,
+        subscriber: Box<dyn Subscribers>,
+        measurements: Box<dyn Measurements>,
+    }
 
     impl Notifier {
-        fn new() -> Self {
-            Self
+        fn new(
+            sender: Box<dyn Sender>,
+            subscriber: Box<dyn Subscribers>,
+            measurements: Box<dyn Measurements>,
+        ) -> Self {
+            Self {
+                sender,
+                subscriber,
+                measurements,
+            }
         }
 
-        fn notify(&self, subscribers: &[Subscriber]) -> Result<(), String> {
+        fn notify(&self) -> Result<(), String> {
             Ok(())
         }
     }
@@ -59,21 +71,43 @@ mod test {
         fn send(&self, subscriber: Subscriber, notification: Notification) -> Result<(), String>;
     }
 
+    #[automock]
+    trait Subscribers {
+        fn get(&self) -> Result<Vec<Subscriber>, String>;
+    }
+
+    #[automock]
+    trait Measurements {
+        fn get(&self) -> Result<Vec<Measurement>, String>;
+    }
+
     #[test]
     fn subscribers_receive_notification_given_a_measurement_for_today() {
         let measurement = Measurement::new("2023-06-01", "04:15", -15);
         let subscriber = Subscriber::new("Foo Bar", "foo@bar.com", "3331234567");
-        let notification = Notification::from_measurement(measurement);
 
-        assert!(notification.is_some());
-        let notifier = Notifier::new();
-        let subscribers = [subscriber.clone()];
-        let result = notifier.notify(&subscribers);
-        assert!(result.is_ok());
+        let mut measurements = MockMeasurements::new();
+        measurements
+            .expect_get()
+            .times(1)
+            .return_once(move || Ok(vec![measurement]));
+
+        let mut subscribers = MockSubscribers::new();
+        subscribers
+            .expect_get()
+            .times(1)
+            .return_once(move || Ok(vec![subscriber]));
+
         let mut sender = MockSender::new();
-
         sender.expect_send().times(1).returning(|_, _| Ok(()));
-        sender.send(subscriber, notification.unwrap());
+
+        let notifier = Notifier::new(
+            Box::new(sender),
+            Box::new(subscribers),
+            Box::new(measurements),
+        );
+
+        let result = notifier.notify();
     }
 
     //#[test]
