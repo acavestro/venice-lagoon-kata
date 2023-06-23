@@ -18,7 +18,7 @@ mod test {
         }
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, Debug, PartialEq)]
     struct Subscriber {
         name: String,
         email: String,
@@ -35,11 +35,19 @@ mod test {
         }
     }
 
-    struct Notification;
+    #[derive(Debug, PartialEq)]
+    struct Notification {
+        text: String,
+    }
 
     impl Notification {
+        fn new(text: impl ToString) -> Self {
+            Self {
+                text: text.to_string(),
+            }
+        }
         fn from_measurement(measurement: Measurement) -> Option<Self> {
-            Some(Self)
+            Some(Self::new(""))
         }
     }
 
@@ -92,6 +100,8 @@ mod test {
         let measurement = Measurement::new("2023-06-01", "04:15", -15);
         let subscriber = Subscriber::new("Foo Bar", "foo@bar.com", "3331234567");
 
+        let expected_subscriber = subscriber.clone();
+
         let mut measurements = MockMeasurements::new();
         measurements
             .expect_get()
@@ -104,8 +114,17 @@ mod test {
             .times(1)
             .return_once(move || Ok(vec![subscriber]));
 
+        let expected_notification = Notification::new(
+            r#"Hello Foo Bar,
+            today the high tide is forecast to be at yellow warning level. The highest peak will be at {time}."#,
+        );
+
         let mut sender = MockSender::new();
-        sender.expect_send().times(1).returning(|_, _| Ok(()));
+        sender
+            .expect_send()
+            .times(1)
+            .with(eq(expected_subscriber), eq(expected_notification))
+            .returning(|_, _| Ok(()));
 
         let notifier = Notifier::new(
             Box::new(sender),
