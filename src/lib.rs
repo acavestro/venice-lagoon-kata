@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod test {
+    use chrono::{Date, DateTime, NaiveDate, Utc};
     use rstest::rstest;
 
     use mockall::{automock, predicate::*};
@@ -18,9 +19,9 @@ mod test {
                 level,
             }
         }
-// * **Yellow warning**: the water level is above of the lowest place in Venice, which is 80cm high
-// * **Orange warning**: the water level is above Rialto area height, which is 105cm high. It means that 5% of the city is flooded.
-// * **Red warning**: the water level is above Train Station height (Santa Lucia), which is 135cm high. Almost 50% of the city is flooded
+        // * **Yellow warning**: the water level is above of the lowest place in Venice, which is 80cm high
+        // * **Orange warning**: the water level is above Rialto area height, which is 105cm high. It means that 5% of the city is flooded.
+        // * **Red warning**: the water level is above Train Station height (Santa Lucia), which is 135cm high. Almost 50% of the city is flooded
 
         fn level_as_str(&self) -> &str {
             match self.level {
@@ -64,7 +65,7 @@ mod test {
             Some(Self::from_text(format!(
                 r#"Hello {},
             today the high tide is forecast to be at {} warning level. The highest peak will be at {}."#,
-                subscriber.name, 
+                subscriber.name,
                 measurement.level_as_str(),
                 measurement.time,
             )))
@@ -91,11 +92,15 @@ mod test {
         }
 
         fn notify(&self) -> Result<(), String> {
-            let measurements = self.measurements.get()?;
+            let measurements = self
+                .measurements
+                .get(NaiveDate::from_ymd_opt(2023, 6, 23).expect("invalid date"))?;
             let subscribers = self.subscribers.get()?;
             let subscriber = subscribers.first().unwrap().clone();
-            let notification =
-                Notification::new(measurements.first().unwrap(), &subscriber).unwrap();
+            let Some(measurement) = measurements.first() else {
+                return Ok(());
+            };
+            let notification = Notification::new(measurement, &subscriber).unwrap();
             self.sender.send(subscriber, notification)
         }
     }
@@ -112,7 +117,7 @@ mod test {
 
     #[automock]
     trait Measurements {
-        fn get(&self) -> Result<Vec<Measurement>, String>;
+        fn get(&self, date: NaiveDate) -> Result<Vec<Measurement>, String>;
     }
 
     #[rstest]
@@ -135,7 +140,7 @@ mod test {
         measurements
             .expect_get()
             .times(1)
-            .return_once(move || Ok(vec![measurement]));
+            .return_once(move |_| Ok(vec![measurement]));
 
         let mut subscribers = MockSubscribers::new();
         subscribers
@@ -160,18 +165,46 @@ mod test {
         assert!(result.is_ok());
     }
 
-
     #[rstest]
     #[case::green(Measurement::new("2023-06-1", "04:15", 30), "green")]
     #[case::yellow(Measurement::new("2023-06-1", "04:15", 85), "yellow")]
     #[case::orange(Measurement::new("2023-06-1", "04:15", 120), "orange")]
     #[case::red(Measurement::new("2023-06-1", "04:15", 200), "red")]
-    fn it_renders_the_level_as_a_warning_string(#[case] measurement: Measurement, #[case] expected_warning: &str) {
+    fn it_renders_the_level_as_a_warning_string(
+        #[case] measurement: Measurement,
+        #[case] expected_warning: &str,
+    ) {
         assert_eq!(expected_warning, measurement.level_as_str());
     }
 
-    //#[test]
-    // fn subscribers_dont_receive_notification_when_no_measurement_for_today() {
-    //     todo!()
-    // }
+    #[rstest]
+    fn subscribers_dont_receive_notification_when_no_measurement_for_today() {
+        let measurement = Measurement::new("2023-06-1", "04:15", 80);
+        let subscriber = Subscriber::new("Foo Bar", "foo@bar.com", "3331234567");
+        let expected_subscriber = subscriber.clone();
+
+        let mut measurements = MockMeasurements::new();
+        measurements
+            .expect_get()
+            .times(1)
+            .return_once(move |_| Ok(vec![]));
+
+        let mut subscribers = MockSubscribers::new();
+        subscribers
+            .expect_get()
+            .times(1)
+            .return_once(move || Ok(vec![subscriber]));
+
+        let mut sender = MockSender::new();
+        sender.expect_send().times(0);
+
+        let notifier = Notifier::new(
+            Box::new(sender),
+            Box::new(subscribers),
+            Box::new(measurements),
+        );
+
+        let result = notifier.notify();
+        assert!(result.is_ok());
+    }
 }
