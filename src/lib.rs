@@ -50,7 +50,7 @@ mod test {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq)]
     struct Notification {
         text: String,
     }
@@ -64,7 +64,7 @@ mod test {
         fn new(measurement: &Measurement, subscriber: &Subscriber) -> Option<Self> {
             Some(Self::from_text(format!(
                 r#"Hello {},
-            today the high tide is forecast to be at {} warning level. The highest peak will be at {}."#,
+                today the high tide is forecast to be at {} warning level. The highest peak will be at {}."#,
                 subscriber.name,
                 measurement.level_as_str(),
                 measurement.time,
@@ -95,8 +95,6 @@ mod test {
             let measurements = self
                 .measurements
                 .get(NaiveDate::from_ymd_opt(2023, 6, 23).expect("invalid date"))?;
-            let subscribers = self.subscribers.get()?;
-            let subscriber = subscribers.first().unwrap().clone();
             let Some(measurement) = measurements.first() else {
                 return Ok(());
             };
@@ -104,14 +102,19 @@ mod test {
             if measurement.level_as_str() == "green" {
                 return Ok(());
             }
-            let notification = Notification::new(measurement, &subscriber).unwrap();
-            self.sender.send(subscriber, notification)
+
+            for subscriber in self.subscribers.get()? {
+                let notification = Notification::new(measurement, &subscriber).unwrap();
+                self.sender.send(&subscriber, notification)?;
+            }
+
+            Ok(())
         }
     }
 
     #[automock]
     trait Sender {
-        fn send(&self, subscriber: Subscriber, notification: Notification) -> Result<(), String>;
+        fn send(&self, subscriber: &Subscriber, notification: Notification) -> Result<(), String>;
     }
 
     #[automock]
@@ -125,20 +128,47 @@ mod test {
     }
 
     #[rstest]
-    #[case(Measurement::new("2023-06-1", "04:15", 80), Subscriber::new("Foo Bar", "foo@bar.com", "3331234567"), Notification::from_text(
-            r#"Hello Foo Bar,
-            today the high tide is forecast to be at yellow warning level. The highest peak will be at 04:15."#,
+    #[case(
+        Measurement::new("2023-06-1", "04:15", 80), 
+        (
+            Subscriber::new("Foo Bar", "foo@bar.com", "3331234567"),
+            Notification::from_text(
+                r#"Hello Foo Bar,
+                today the high tide is forecast to be at yellow warning level. The highest peak will be at 04:15."#,
+            )
+        ),
+        (
+            Subscriber::new("Tizio Caso", "foo@bar.com", "3331234567"),
+            Notification::from_text(
+                r#"Hello Tizio Caso,
+                today the high tide is forecast to be at yellow warning level. The highest peak will be at 04:15."#,
+            )
         ))]
-    #[case(Measurement::new("2023-06-1", "10:10", 110), Subscriber::new("Tizio Caso", "foo@bar.com", "3331234567"), Notification::from_text(
-            r#"Hello Tizio Caso,
-            today the high tide is forecast to be at orange warning level. The highest peak will be at 10:10."#,
+    #[case(
+        Measurement::new("2023-06-1", "10:10", 110), 
+        (
+            Subscriber::new("Foo Bar", "foo@bar.com", "3331234567"),
+            Notification::from_text(
+                r#"Hello Foo Bar,
+                today the high tide is forecast to be at orange warning level. The highest peak will be at 10:10."#,
+            )
+        ),
+        (
+            Subscriber::new("Tizio Caso", "foo@bar.com", "3331234567"),
+            Notification::from_text(
+                r#"Hello Tizio Caso,
+                today the high tide is forecast to be at orange warning level. The highest peak will be at 10:10."#,
+            )
         ))]
-    fn subscribers_receive_notification_given_a_measurement_for_today(
+    fn subscribers_receive_notification_given_a_measurement(
         #[case] measurement: Measurement,
-        #[case] subscriber: Subscriber,
-        #[case] expected_notification: Notification,
+        #[case] data1: (Subscriber, Notification),
+        #[case] data2: (Subscriber, Notification),
     ) {
-        let expected_subscriber = subscriber.clone();
+        let (subscriber1, notification1) = data1;
+        let (subscriber2, notification2) = data2;
+
+        let subscribers_data = vec![subscriber1.clone(), subscriber2.clone()];
 
         let mut measurements = MockMeasurements::new();
         measurements
@@ -150,13 +180,19 @@ mod test {
         subscribers
             .expect_get()
             .times(1)
-            .return_once(move || Ok(vec![subscriber]));
+            .return_once(move || Ok(subscribers_data));
 
         let mut sender = MockSender::new();
         sender
             .expect_send()
             .times(1)
-            .with(eq(expected_subscriber), eq(expected_notification))
+            .with(eq(subscriber1), eq(notification1))
+            .returning(|_, _| Ok(()));
+
+        sender
+            .expect_send()
+            .times(1)
+            .with(eq(subscriber2), eq(notification2))
             .returning(|_, _| Ok(()));
 
         let notifier = Notifier::new(
@@ -183,9 +219,6 @@ mod test {
 
     #[rstest]
     fn subscribers_dont_receive_notification_when_no_measurement_for_today() {
-        let subscriber = Subscriber::new("Foo Bar", "foo@bar.com", "3331234567");
-        let expected_subscriber = subscriber.clone();
-
         let mut measurements = MockMeasurements::new();
         measurements
             .expect_get()
@@ -193,10 +226,7 @@ mod test {
             .return_once(move |_| Ok(vec![]));
 
         let mut subscribers = MockSubscribers::new();
-        subscribers
-            .expect_get()
-            .times(1)
-            .return_once(move || Ok(vec![subscriber]));
+        subscribers.expect_get().times(0);
 
         let mut sender = MockSender::new();
         sender.expect_send().times(0);
@@ -214,8 +244,6 @@ mod test {
     #[rstest]
     fn subscribers_dont_receive_notification_when_the_measurement_is_green() {
         let measurement = Measurement::new("2023-06-1", "04:15", 15);
-        let subscriber = Subscriber::new("Foo Bar", "foo@bar.com", "3331234567");
-        let expected_subscriber = subscriber.clone();
 
         let mut measurements = MockMeasurements::new();
         measurements
@@ -224,10 +252,7 @@ mod test {
             .return_once(move |_| Ok(vec![measurement]));
 
         let mut subscribers = MockSubscribers::new();
-        subscribers
-            .expect_get()
-            .times(1)
-            .return_once(move || Ok(vec![subscriber]));
+        subscribers.expect_get().times(0);
 
         let mut sender = MockSender::new();
         sender.expect_send().times(0);
