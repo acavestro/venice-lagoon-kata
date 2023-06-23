@@ -100,6 +100,10 @@ mod test {
             let Some(measurement) = measurements.first() else {
                 return Ok(());
             };
+
+            if measurement.level_as_str() == "green" {
+                return Ok(());
+            }
             let notification = Notification::new(measurement, &subscriber).unwrap();
             self.sender.send(subscriber, notification)
         }
@@ -179,7 +183,6 @@ mod test {
 
     #[rstest]
     fn subscribers_dont_receive_notification_when_no_measurement_for_today() {
-        let measurement = Measurement::new("2023-06-1", "04:15", 80);
         let subscriber = Subscriber::new("Foo Bar", "foo@bar.com", "3331234567");
         let expected_subscriber = subscriber.clone();
 
@@ -188,6 +191,37 @@ mod test {
             .expect_get()
             .times(1)
             .return_once(move |_| Ok(vec![]));
+
+        let mut subscribers = MockSubscribers::new();
+        subscribers
+            .expect_get()
+            .times(1)
+            .return_once(move || Ok(vec![subscriber]));
+
+        let mut sender = MockSender::new();
+        sender.expect_send().times(0);
+
+        let notifier = Notifier::new(
+            Box::new(sender),
+            Box::new(subscribers),
+            Box::new(measurements),
+        );
+
+        let result = notifier.notify();
+        assert!(result.is_ok());
+    }
+
+    #[rstest]
+    fn subscribers_dont_receive_notification_when_the_measurement_is_green() {
+        let measurement = Measurement::new("2023-06-1", "04:15", 15);
+        let subscriber = Subscriber::new("Foo Bar", "foo@bar.com", "3331234567");
+        let expected_subscriber = subscriber.clone();
+
+        let mut measurements = MockMeasurements::new();
+        measurements
+            .expect_get()
+            .times(1)
+            .return_once(move |_| Ok(vec![measurement]));
 
         let mut subscribers = MockSubscribers::new();
         subscribers
